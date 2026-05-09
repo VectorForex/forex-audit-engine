@@ -1,9 +1,11 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Trade, TradeAnalytics
-from .serializers import TradeSerializer, TradeAnalyticsSerializer
+from .models import Trade, TradeAnalytics, PerformanceToken, UserAccount
+from .serializers import TradeSerializer, TradeAnalyticsSerializer, PerformanceTokenSerializer, UserAccountSerializer
 from .utils import TradeParser, HashAnchor, AnalyticsCalculator
+from .stellar_client import StellarClient
+from datetime import timedelta
 
 class TradeViewSet(viewsets.ModelViewSet):
     serializer_class = TradeSerializer
@@ -51,14 +53,63 @@ class TradeViewSet(viewsets.ModelViewSet):
         trades = Trade.objects.filter(user_id=user_id, pnl__isnull=True)
         
         for trade in trades:
-            pnl = (trade.exit_price - trade.entry_price) * 100000  # Simplified
+            pnl = (trade.exit_price - trade.entry_price) * 100000
             trade.pnl = pnl
+            trade.rr_ratio = AnalyticsCalculator.calculate_rr_ratio(
+                trade.entry_price, trade.exit_price, trade.stop_loss, trade.take_profit
+            )
             trade.save()
         
         return Response({'updated': trades.count()})
 
+    @action(detail=False, methods=['get'])
+    def by_session(self, request):
+        """Get trades grouped by session"""
+        user_id = request.query_params.get('user_id')
+        trades = Trade.objects.filter(user_id=user_id)
+        
+        sessions = {}
+        for session in ['asian', 'european', 'us']:
+            session_trades = trades.filter(session=session)
+            sessions[session] = {
+                'count': session_trades.count(),
+                'win_rate': AnalyticsCalculator.calculate_win_rate(session_trades),
+            }
+        return Response(sessions)
+
+
+class PortfolioViewSet(viewsets.ViewSet):
+    @action(detail=False, methods=['post'])
+    def multi_account_stats(self, request):
+        """Get aggregated stats for multiple accounts"""
+        user_ids = request.data.get('user_ids', [])
+        
+        from .portfolio import PortfolioAnalyzer
+        
+        return Response({
+            'summary': PortfolioAnalyzer.get_multi_account_stats(user_ids),
+            'comparison': PortfolioAnalyzer.get_account_comparison(user_ids),
+            'allocation': PortfolioAnalyzer.get_portfolio_allocation(user_ids),
+            'correlations': PortfolioAnalyzer.get_correlation_matrix(user_ids),
+        })
+
 
 class AnalyticsViewSet(viewsets.ViewSet):
+    @action(detail=False, methods=['get'])
+    def advanced_stats(self, request):
+        """Get advanced analytics including Sharpe ratio"""
+        user_id = request.query_params.get('user_id')
+        trades = Trade.objects.filter(user_id=user_id)
+        
+        from .analytics_engine import AdvancedAnalytics
+        
+        return Response({
+            'sharpe_ratio': AdvancedAnalytics.calculate_sharpe_ratio(trades),
+            'recovery_factor': AdvancedAnalytics.calculate_recovery_factor(trades),
+            'time_of_day': AdvancedAnalytics.calculate_time_of_day_stats(trades),
+            'best_setups': AdvancedAnalytics.identify_best_setups(trades),
+        })
+
     @action(detail=False, methods=['get'])
     def user_stats(self, request):
         """Get analytics for a user"""
@@ -74,6 +125,8 @@ class AnalyticsViewSet(viewsets.ViewSet):
         analytics.profit_factor = AnalyticsCalculator.calculate_profit_factor(trades)
         analytics.expectancy = AnalyticsCalculator.calculate_expectancy(trades)
         analytics.max_drawdown = AnalyticsCalculator.calculate_mdd(trades)
+        analytics.consecutive_wins = AnalyticsCalculator.calculate_consecutive_wins(trades)
+        analytics.consecutive_losses = AnalyticsCalculator.calculate_consecutive_losses(trades)
         analytics.save()
         
         serializer = TradeAnalyticsSerializer(analytics)
@@ -92,12 +145,28 @@ class AnalyticsViewSet(viewsets.ViewSet):
                 'count': setup_trades.count(),
                 'win_rate': AnalyticsCalculator.calculate_win_rate(setup_trades),
                 'expectancy': AnalyticsCalculator.calculate_expectancy(setup_trades),
+                'profit_factor': AnalyticsCalculator.calculate_profit_factor(setup_trades),
             }
         
         return Response(setups)
 
     @action(detail=False, methods=['get'])
-    def red_flags(self, request):
+    def leaderboard(self, request):
+        """Get top traders by win rate"""
+        limit = request.query_params.get('limit', 100)
+        analytics = TradeAnalytics.objects.all().order_by('-win_rate')[:int(limit)]
+        
+        leaderboard = []
+        for entry in analytics:
+            leaderboard.append({
+                'user_id': entry.user_id,
+                'total_trades': entry.total_trades,
+                'win_rate': entry.win_rate,
+                'profit_factor': entry.profit_factor,
+                'expectancy': entry.expectancy,
+            })
+        
+        return Response(leaderboard)
         """Detect red flags in trading"""
         user_id = request.query_params.get('user_id')
         trades = Trade.objects.filter(user_id=user_id).order_by('timestamp')
@@ -106,6 +175,7 @@ class AnalyticsViewSet(viewsets.ViewSet):
             'revenge_trading': [],
             'high_drawdown': [],
             'low_win_rate_sessions': {},
+            'double_dipping': [],
         }
         
         for i, trade in enumerate(trades):
@@ -118,4 +188,74 @@ class AnalyticsViewSet(viewsets.ViewSet):
         if mdd > 1000:
             flags['high_drawdown'].append(mdd)
         
+        from .analytics_engine import AdvancedAnalytics
+        flags['double_dipping'] = AdvancedAnalytics.detect_double_dipping(trades)
+        
         return Response(flags)
+
+
+class PerformanceTokenViewSet(viewsets.ModelViewSet):
+    serializer_class = PerformanceTokenSerializer
+    queryset = PerformanceToken.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def mint_token(self, request):
+        """Mint performance token for user"""
+        user_id = request.data.get('user_id')
+        win_rate_threshold = request.data.get('win_rate_threshold', 55)
+        
+        analytics = TradeAnalytics.objects.get(user_id=user_id)
+        if analytics.win_rate < win_rate_threshold:
+            return Response(
+                {'error': f'Win rate {analytics.win_rate}% below threshold {win_rate_threshold}%'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user_account = UserAccount.objects.get(user_id=user_id)
+            stellar_client = StellarClient()
+            from stellar_sdk import Keypair
+            keypair = Keypair.from_secret(user_account.stellar_secret_key)
+            
+            tx_hash = stellar_client.mint_performance_token(keypair, analytics.win_rate)
+            
+            token, created = PerformanceToken.objects.get_or_create(
+                user_id=user_id,
+                defaults={
+                    'win_rate_threshold': win_rate_threshold,
+                    'stellar_tx_hash': tx_hash,
+                    'stellar_public_key': user_account.stellar_public_key,
+                }
+            )
+            
+            serializer = PerformanceTokenSerializer(token)
+            return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        except UserAccount.DoesNotExist:
+            return Response({'error': 'User account not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UserAccountViewSet(viewsets.ModelViewSet):
+    serializer_class = UserAccountSerializer
+    queryset = UserAccount.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def create_account(self, request):
+        """Create Stellar account for user"""
+        user_id = request.data.get('user_id')
+        
+        if UserAccount.objects.filter(user_id=user_id).exists():
+            return Response({'error': 'Account already exists'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        stellar_client = StellarClient()
+        keys = stellar_client.create_account()
+        
+        account = UserAccount.objects.create(
+            user_id=user_id,
+            stellar_public_key=keys['public_key'],
+            stellar_secret_key=keys['secret_key'],
+        )
+        
+        serializer = UserAccountSerializer(account)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
