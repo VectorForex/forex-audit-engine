@@ -1,9 +1,10 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Trade, TradeAnalytics
-from .serializers import TradeSerializer, TradeAnalyticsSerializer
+from .models import Trade, TradeAnalytics, PerformanceToken
+from .serializers import TradeSerializer, TradeAnalyticsSerializer, PerformanceTokenSerializer
 from .utils import TradeParser, HashAnchor, AnalyticsCalculator
+from datetime import timedelta
 
 class TradeViewSet(viewsets.ModelViewSet):
     serializer_class = TradeSerializer
@@ -51,11 +52,29 @@ class TradeViewSet(viewsets.ModelViewSet):
         trades = Trade.objects.filter(user_id=user_id, pnl__isnull=True)
         
         for trade in trades:
-            pnl = (trade.exit_price - trade.entry_price) * 100000  # Simplified
+            pnl = (trade.exit_price - trade.entry_price) * 100000
             trade.pnl = pnl
+            trade.rr_ratio = AnalyticsCalculator.calculate_rr_ratio(
+                trade.entry_price, trade.exit_price, trade.stop_loss, trade.take_profit
+            )
             trade.save()
         
         return Response({'updated': trades.count()})
+
+    @action(detail=False, methods=['get'])
+    def by_session(self, request):
+        """Get trades grouped by session"""
+        user_id = request.query_params.get('user_id')
+        trades = Trade.objects.filter(user_id=user_id)
+        
+        sessions = {}
+        for session in ['asian', 'european', 'us']:
+            session_trades = trades.filter(session=session)
+            sessions[session] = {
+                'count': session_trades.count(),
+                'win_rate': AnalyticsCalculator.calculate_win_rate(session_trades),
+            }
+        return Response(sessions)
 
 
 class AnalyticsViewSet(viewsets.ViewSet):
@@ -74,6 +93,8 @@ class AnalyticsViewSet(viewsets.ViewSet):
         analytics.profit_factor = AnalyticsCalculator.calculate_profit_factor(trades)
         analytics.expectancy = AnalyticsCalculator.calculate_expectancy(trades)
         analytics.max_drawdown = AnalyticsCalculator.calculate_mdd(trades)
+        analytics.consecutive_wins = AnalyticsCalculator.calculate_consecutive_wins(trades)
+        analytics.consecutive_losses = AnalyticsCalculator.calculate_consecutive_losses(trades)
         analytics.save()
         
         serializer = TradeAnalyticsSerializer(analytics)
@@ -92,6 +113,7 @@ class AnalyticsViewSet(viewsets.ViewSet):
                 'count': setup_trades.count(),
                 'win_rate': AnalyticsCalculator.calculate_win_rate(setup_trades),
                 'expectancy': AnalyticsCalculator.calculate_expectancy(setup_trades),
+                'profit_factor': AnalyticsCalculator.calculate_profit_factor(setup_trades),
             }
         
         return Response(setups)
@@ -119,3 +141,29 @@ class AnalyticsViewSet(viewsets.ViewSet):
             flags['high_drawdown'].append(mdd)
         
         return Response(flags)
+
+
+class PerformanceTokenViewSet(viewsets.ModelViewSet):
+    serializer_class = PerformanceTokenSerializer
+    queryset = PerformanceToken.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def mint_token(self, request):
+        """Mint performance token for user"""
+        user_id = request.data.get('user_id')
+        win_rate_threshold = request.data.get('win_rate_threshold', 55)
+        
+        analytics = TradeAnalytics.objects.get(user_id=user_id)
+        if analytics.win_rate < win_rate_threshold:
+            return Response(
+                {'error': f'Win rate {analytics.win_rate}% below threshold {win_rate_threshold}%'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        token, created = PerformanceToken.objects.get_or_create(
+            user_id=user_id,
+            defaults={'win_rate_threshold': win_rate_threshold}
+        )
+        
+        serializer = PerformanceTokenSerializer(token)
+        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
