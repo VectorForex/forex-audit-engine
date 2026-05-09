@@ -61,6 +61,18 @@ class PerformanceToken(models.Model):
     win_rate_threshold = models.DecimalField(max_digits=5, decimal_places=2)
     minted_at = models.DateTimeField(auto_now_add=True)
     on_chain_address = models.CharField(max_length=255, null=True)
+    stellar_tx_hash = models.CharField(max_length=255, null=True)
+    stellar_public_key = models.CharField(max_length=255, null=True)
 
     def __str__(self):
         return f"Token for {self.user_id}"
+
+
+class UserAccount(models.Model):
+    user_id = models.CharField(max_length=255, unique=True)
+    stellar_public_key = models.CharField(max_length=255, unique=True)
+    stellar_secret_key = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Account for {self.user_id}"
