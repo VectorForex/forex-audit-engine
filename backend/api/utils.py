@@ -92,3 +92,42 @@ class AnalyticsCalculator:
             if dd > max_dd:
                 max_dd = dd
         return max_dd
+
+    @staticmethod
+    def calculate_consecutive_wins(trades):
+        """Calculate max consecutive wins"""
+        if not trades:
+            return 0
+        max_streak = 0
+        current_streak = 0
+        for trade in trades:
+            if trade.pnl > 0:
+                current_streak += 1
+                max_streak = max(max_streak, current_streak)
+            else:
+                current_streak = 0
+        return max_streak
+
+    @staticmethod
+    def calculate_consecutive_losses(trades):
+        """Calculate max consecutive losses"""
+        if not trades:
+            return 0
+        max_streak = 0
+        current_streak = 0
+        for trade in trades:
+            if trade.pnl < 0:
+                current_streak += 1
+                max_streak = max(max_streak, current_streak)
+            else:
+                current_streak = 0
+        return max_streak
+
+    @staticmethod
+    def calculate_rr_ratio(entry, exit_price, stop_loss, take_profit):
+        """Calculate risk-to-reward ratio"""
+        risk = abs(entry - stop_loss)
+        reward = abs(take_profit - entry)
+        if risk == 0:
+            return 0
+        return reward / risk
