@@ -1,9 +1,10 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Trade, TradeAnalytics, PerformanceToken
-from .serializers import TradeSerializer, TradeAnalyticsSerializer, PerformanceTokenSerializer
+from .models import Trade, TradeAnalytics, PerformanceToken, UserAccount
+from .serializers import TradeSerializer, TradeAnalyticsSerializer, PerformanceTokenSerializer, UserAccountSerializer
 from .utils import TradeParser, HashAnchor, AnalyticsCalculator
+from .stellar_client import StellarClient
 from datetime import timedelta
 
 class TradeViewSet(viewsets.ModelViewSet):
@@ -160,10 +161,51 @@ class PerformanceTokenViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        token, created = PerformanceToken.objects.get_or_create(
+        try:
+            user_account = UserAccount.objects.get(user_id=user_id)
+            stellar_client = StellarClient()
+            from stellar_sdk import Keypair
+            keypair = Keypair.from_secret(user_account.stellar_secret_key)
+            
+            tx_hash = stellar_client.mint_performance_token(keypair, analytics.win_rate)
+            
+            token, created = PerformanceToken.objects.get_or_create(
+                user_id=user_id,
+                defaults={
+                    'win_rate_threshold': win_rate_threshold,
+                    'stellar_tx_hash': tx_hash,
+                    'stellar_public_key': user_account.stellar_public_key,
+                }
+            )
+            
+            serializer = PerformanceTokenSerializer(token)
+            return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        except UserAccount.DoesNotExist:
+            return Response({'error': 'User account not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UserAccountViewSet(viewsets.ModelViewSet):
+    serializer_class = UserAccountSerializer
+    queryset = UserAccount.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def create_account(self, request):
+        """Create Stellar account for user"""
+        user_id = request.data.get('user_id')
+        
+        if UserAccount.objects.filter(user_id=user_id).exists():
+            return Response({'error': 'Account already exists'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        stellar_client = StellarClient()
+        keys = stellar_client.create_account()
+        
+        account = UserAccount.objects.create(
             user_id=user_id,
-            defaults={'win_rate_threshold': win_rate_threshold}
+            stellar_public_key=keys['public_key'],
+            stellar_secret_key=keys['secret_key'],
         )
         
-        serializer = PerformanceTokenSerializer(token)
-        return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        serializer = UserAccountSerializer(account)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
