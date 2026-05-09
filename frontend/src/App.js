@@ -1,0 +1,23 @@
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import Dashboard from './pages/Dashboard';
+import Analytics from './pages/Analytics';
+import RedFlags from './pages/RedFlags';
+import Navigation from './components/Navigation';
+
+function App() {
+  return (
+    <Router>
+      <div className="min-h-screen bg-gray-900 text-white">
+        <Navigation />
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/analytics" element={<Analytics />} />
+          <Route path="/red-flags" element={<RedFlags />} />
+        </Routes>
+      </div>
+    </Router>
+  );
+}
+
+export default App;
