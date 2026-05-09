@@ -151,7 +151,22 @@ class AnalyticsViewSet(viewsets.ViewSet):
         return Response(setups)
 
     @action(detail=False, methods=['get'])
-    def red_flags(self, request):
+    def leaderboard(self, request):
+        """Get top traders by win rate"""
+        limit = request.query_params.get('limit', 100)
+        analytics = TradeAnalytics.objects.all().order_by('-win_rate')[:int(limit)]
+        
+        leaderboard = []
+        for entry in analytics:
+            leaderboard.append({
+                'user_id': entry.user_id,
+                'total_trades': entry.total_trades,
+                'win_rate': entry.win_rate,
+                'profit_factor': entry.profit_factor,
+                'expectancy': entry.expectancy,
+            })
+        
+        return Response(leaderboard)
         """Detect red flags in trading"""
         user_id = request.query_params.get('user_id')
         trades = Trade.objects.filter(user_id=user_id).order_by('timestamp')
