@@ -80,6 +80,21 @@ class TradeViewSet(viewsets.ModelViewSet):
 
 class AnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
+    def advanced_stats(self, request):
+        """Get advanced analytics including Sharpe ratio"""
+        user_id = request.query_params.get('user_id')
+        trades = Trade.objects.filter(user_id=user_id)
+        
+        from .analytics_engine import AdvancedAnalytics
+        
+        return Response({
+            'sharpe_ratio': AdvancedAnalytics.calculate_sharpe_ratio(trades),
+            'recovery_factor': AdvancedAnalytics.calculate_recovery_factor(trades),
+            'time_of_day': AdvancedAnalytics.calculate_time_of_day_stats(trades),
+            'best_setups': AdvancedAnalytics.identify_best_setups(trades),
+        })
+
+    @action(detail=False, methods=['get'])
     def user_stats(self, request):
         """Get analytics for a user"""
         user_id = request.query_params.get('user_id')
@@ -129,6 +144,7 @@ class AnalyticsViewSet(viewsets.ViewSet):
             'revenge_trading': [],
             'high_drawdown': [],
             'low_win_rate_sessions': {},
+            'double_dipping': [],
         }
         
         for i, trade in enumerate(trades):
@@ -140,6 +156,9 @@ class AnalyticsViewSet(viewsets.ViewSet):
         mdd = AnalyticsCalculator.calculate_mdd(trades)
         if mdd > 1000:
             flags['high_drawdown'].append(mdd)
+        
+        from .analytics_engine import AdvancedAnalytics
+        flags['double_dipping'] = AdvancedAnalytics.detect_double_dipping(trades)
         
         return Response(flags)
 
