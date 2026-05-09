@@ -5,6 +5,8 @@ import Analytics from './pages/Analytics';
 import AdvancedAnalytics from './pages/AdvancedAnalytics';
 import RedFlags from './pages/RedFlags';
 import Leaderboard from './pages/Leaderboard';
+import TokenMinting from './pages/TokenMinting';
+import Portfolio from './pages/Portfolio';
 import Navigation from './components/Navigation';
 
 function App() {
@@ -18,6 +20,8 @@ function App() {
           <Route path="/advanced" element={<AdvancedAnalytics />} />
           <Route path="/red-flags" element={<RedFlags />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/tokens" element={<TokenMinting />} />
+          <Route path="/portfolio" element={<Portfolio />} />
         </Routes>
       </div>
     </Router>
