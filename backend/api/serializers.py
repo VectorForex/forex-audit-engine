@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Trade, TradeAnalytics, PerformanceToken
+from .models import Trade, TradeAnalytics, PerformanceToken, UserAccount
 
 class TradeSerializer(serializers.ModelSerializer):
     class Meta:
@@ -25,3 +25,9 @@ class PerformanceTokenSerializer(serializers.ModelSerializer):
         model = PerformanceToken
         fields = '__all__'
         read_only_fields = ['minted_at']
+
+class UserAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserAccount
+        fields = ['user_id', 'stellar_public_key', 'created_at']
+        read_only_fields = ['stellar_public_key', 'created_at']
