@@ -78,6 +78,22 @@ class TradeViewSet(viewsets.ModelViewSet):
         return Response(sessions)
 
 
+class PortfolioViewSet(viewsets.ViewSet):
+    @action(detail=False, methods=['post'])
+    def multi_account_stats(self, request):
+        """Get aggregated stats for multiple accounts"""
+        user_ids = request.data.get('user_ids', [])
+        
+        from .portfolio import PortfolioAnalyzer
+        
+        return Response({
+            'summary': PortfolioAnalyzer.get_multi_account_stats(user_ids),
+            'comparison': PortfolioAnalyzer.get_account_comparison(user_ids),
+            'allocation': PortfolioAnalyzer.get_portfolio_allocation(user_ids),
+            'correlations': PortfolioAnalyzer.get_correlation_matrix(user_ids),
+        })
+
+
 class AnalyticsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def advanced_stats(self, request):
